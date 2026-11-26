@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { layerFor, uid, useStore } from '../store';
-import type { AreaObj, ArrowObj, LineObj, MapObject, Pt, TextObj, UnitObj } from '../types';
+import { docScale, layerFor, uid, useStore } from '../store';
+import type { AreaObj, ArrowObj, LineObj, MapObject, Pt, TextObj, Tool, UnitObj } from '../types';
 import { MapContent, objColor } from './MapSvg';
-import { dist, formatDistance, smoothPath, toPathD } from '../graphics/geometry';
+import { dedupePoints, dist, formatDistance, smoothPath, toPathD } from '../graphics/geometry';
 import { clipboard, fitView } from '../actions';
 
 type Drag =
@@ -93,21 +93,49 @@ export default function Canvas() {
     return () => window.removeEventListener('tactic:fit', onFit);
   }, []);
 
+  /**
+   * Turn the drafted points into an object. After that the editor switches to
+   * the select tool (unless `keep`, e.g. Shift held) so the new object can be
+   * adjusted right away instead of starting another one by accident.
+   */
   const finishDraft = useCallback(
-    (pts: Pt[]) => {
+    (raw: Pt[], keep = false, forTool: Tool = tool) => {
       const st = useStore.getState();
       const d = st.defaults;
-      if (tool === 'arrow' && pts.length >= 2) {
-        const o: ArrowObj = { id: uid(), kind: 'arrow', layerId: layerFor('arrow', d.side), side: d.side, style: d.arrowStyle, points: pts, width: d.arrowStyle === 'main' || d.arrowStyle === 'counter' ? 36 : 22, label: '' };
+      const k = docScale(st.doc);
+      // drop the duplicate points a double click leaves at the end
+      const pts = dedupePoints(raw, 3 / st.view.zoom, forTool === 'area');
+      let made = false;
+      if (forTool === 'arrow' && pts.length >= 2) {
+        const wide = d.arrowStyle === 'main' || d.arrowStyle === 'counter';
+        const o: ArrowObj = { id: uid(), kind: 'arrow', layerId: layerFor('arrow', d.side), side: d.side, style: d.arrowStyle, points: pts, width: (wide ? 36 : 22) * k, label: '' };
         st.addObject(o);
-      } else if (tool === 'line' && pts.length >= 2) {
-        const o: LineObj = { id: uid(), kind: 'line', layerId: layerFor('line', d.side), side: d.side, style: d.lineStyle, points: pts, width: 3, smooth: true, label: '' };
+        made = true;
+      } else if (forTool === 'line' && pts.length >= 2) {
+        const o: LineObj = { id: uid(), kind: 'line', layerId: layerFor('line', d.side), side: d.side, style: d.lineStyle, points: pts, width: 3 * k, smooth: true, label: '' };
         st.addObject(o);
-      } else if (tool === 'area' && pts.length >= 3) {
-        const o: AreaObj = { id: uid(), kind: 'area', layerId: layerFor('area', d.side), side: d.side, points: pts, width: 3, fill: d.areaFill, fillOpacity: d.areaFill === 'solid' ? 0.2 : 0.7, dashed: false, smooth: true, label: '' };
+        made = true;
+      } else if (forTool === 'area' && pts.length >= 3) {
+        const o: AreaObj = { id: uid(), kind: 'area', layerId: layerFor('area', d.side), side: d.side, points: pts, width: 3 * k, fill: d.areaFill, fillOpacity: d.areaFill === 'solid' ? 0.2 : 0.7, dashed: false, smooth: true, label: '' };
         st.addObject(o);
+        made = true;
+      } else if (raw.length && forTool !== 'calibrate') {
+        st.showToast(forTool === 'area' ? 'Для района нужно минимум 3 точки' : 'Нужно минимум 2 точки');
       }
       setDraft([]);
+      if (made && !keep && st.tool === forTool) st.setTool('select');
+    },
+    [tool],
+  );
+
+  // switching tools in the middle of drawing keeps the drawn object instead of losing it
+  const draftRef = useRef<Pt[]>(draft);
+  draftRef.current = draft;
+  const finishRef = useRef(finishDraft);
+  finishRef.current = finishDraft;
+  useEffect(
+    () => () => {
+      if (draftRef.current.length) finishRef.current(draftRef.current, true, tool);
     },
     [tool],
   );
@@ -125,7 +153,7 @@ export default function Canvas() {
         return;
       }
       if (draft.length) {
-        if (e.key === 'Enter') return finishDraft(draft);
+        if (e.key === 'Enter') return finishDraft(draft, e.shiftKey);
         if (e.key === 'Escape') return setDraft([]);
         if (e.key === 'Backspace') return setDraft(draft.slice(0, -1));
       }
@@ -214,9 +242,10 @@ export default function Canvas() {
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
   };
 
-  const placeUnit = (p: Pt, symbol?: string) => {
+  const placeUnit = (p: Pt, symbol?: string, keep = false) => {
     const st = useStore.getState();
     const d = st.defaults;
+    const k = docScale(st.doc);
     const o: UnitObj = {
       id: uid(),
       kind: 'unit',
@@ -225,7 +254,7 @@ export default function Canvas() {
       symbol: symbol ?? d.symbol,
       x: p.x,
       y: p.y,
-      size: d.unitSize,
+      size: Math.round(d.unitSize * k),
       rotation: 0,
       echelon: d.echelon,
       planned: d.planned,
@@ -234,12 +263,19 @@ export default function Canvas() {
       note: '',
     };
     st.addObject(o);
+    // after placing a sign go back to selection (hold Shift to keep placing)
+    if (!keep) st.setTool('select');
   };
 
   const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     const st = useStore.getState();
     const p = toWorld(e.clientX, e.clientY);
     if (editing) commitEdit();
+    // right click finishes a line / arrow / area being drawn
+    if (e.button === 2 && draft.length && tool !== 'calibrate') {
+      e.preventDefault();
+      return finishDraft(draft, e.shiftKey);
+    }
     if (e.button === 1 || e.button === 2 || tool === 'pan' || spaceDown) {
       e.preventDefault();
       return startDrag({ mode: 'pan', sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y }, e);
@@ -247,7 +283,7 @@ export default function Canvas() {
     if (e.button !== 0) return;
     const target = e.target as Element;
     const handle = target.closest('[data-handle]') as SVGElement | null;
-    if (handle) {
+    if (handle && tool === 'select') {
       const [kind, id, idx] = handle.dataset.handle!.split(':');
       const obj = st.doc.objects.find((o) => o.id === id);
       if (!obj) return;
@@ -269,10 +305,11 @@ export default function Canvas() {
       if (kind === 'rot') return startDrag({ mode: 'rotate', id, center, moved: false }, e);
     }
 
-    if (tool === 'unit') return placeUnit(p);
+    if (tool === 'unit') return placeUnit(p, undefined, e.shiftKey);
     if (tool === 'text') {
-      const o: TextObj = { id: uid(), kind: 'text', layerId: layerFor('text', st.defaults.side), side: st.defaults.side, x: p.x, y: p.y, text: '', fontSize: 22, rotation: 0, bold: true, halo: true };
+      const o: TextObj = { id: uid(), kind: 'text', layerId: layerFor('text', st.defaults.side), side: st.defaults.side, x: p.x, y: p.y, text: '', fontSize: Math.round(22 * docScale(st.doc)), rotation: 0, bold: true, halo: true };
       st.addObject(o);
+      if (!e.shiftKey) st.setTool('select');
       // open the editor after the browser finishes the mouse-down focus change
       setTimeout(() => setEditing({ id: o.id, value: '' }), 0);
       return;
@@ -282,7 +319,9 @@ export default function Canvas() {
       return startDrag({ mode: 'measure', start: p, cur: p }, e);
     }
     if ((POINT_TOOLS as readonly string[]).includes(tool)) {
-      if (e.detail >= 2) return; // dblclick handled separately
+      // the second click of a double click lands on the same spot: don't add it twice
+      const last = draft[draft.length - 1];
+      if (e.detail >= 2 || (last && dist(last, p) * view.zoom < 4)) return;
       const next = [...draft, p];
       if (tool === 'calibrate' && next.length === 2) {
         setDraft([]);
@@ -362,8 +401,9 @@ export default function Canvas() {
         st.updateObjects(
           [d.id],
           (o) => {
-            if (o.kind === 'unit') return { ...o, size: Math.max(16, Math.min(400, d.orig * k)) };
-            if (o.kind === 'text') return { ...o, fontSize: Math.max(6, Math.min(300, d.orig * k)) };
+            const s = docScale(st.doc);
+            if (o.kind === 'unit') return { ...o, size: Math.max(16, Math.min(400 * s, d.orig * k)) };
+            if (o.kind === 'text') return { ...o, fontSize: Math.max(6, Math.min(300 * s, d.orig * k)) };
             return o;
           },
           false,
@@ -413,8 +453,8 @@ export default function Canvas() {
 
   const onDoubleClick = (e: React.MouseEvent) => {
     const st = useStore.getState();
-    if ((POINT_TOOLS as readonly string[]).includes(tool) && tool !== 'calibrate') {
-      finishDraft(draft);
+    if ((POINT_TOOLS as readonly string[]).includes(tool)) {
+      if (tool !== 'calibrate') finishDraft(draft, e.shiftKey);
       return;
     }
     const target = e.target as Element;
@@ -451,8 +491,8 @@ export default function Canvas() {
     const sym = e.dataTransfer.getData('application/x-tactic-symbol');
     if (!sym) return;
     e.preventDefault();
-    placeUnit(toWorld(e.clientX, e.clientY), sym);
     useStore.getState().setDefaults({ symbol: sym });
+    placeUnit(toWorld(e.clientX, e.clientY), sym);
   };
 
   // ---------------------------------------------------------------- overlays
@@ -504,7 +544,7 @@ export default function Canvas() {
             return (
               <g key={b.id} className="sel">
                 <rect x={b.x - pad} y={b.y - pad} width={b.w + pad * 2} height={b.h + pad * 2} fill="none" stroke="#14a1ff" strokeWidth={1.2 / z} strokeDasharray={`${4 / z} ${3 / z}`} />
-                {scalable && selection.length === 1 && (
+                {scalable && selection.length === 1 && tool === 'select' && (
                   <>
                     <rect data-handle={`size:${o.id}`} x={b.x + b.w + pad - hs} y={b.y + b.h + pad - hs} width={hs * 2} height={hs * 2} className="handle" strokeWidth={1.5 / z} style={{ cursor: 'nwse-resize' }} />
                     <line x1={b.x + b.w / 2} y1={b.y - pad} x2={b.x + b.w / 2} y2={b.y - pad - 18 / z} stroke="#14a1ff" strokeWidth={1.2 / z} />
@@ -515,6 +555,7 @@ export default function Canvas() {
             );
           })}
           {selection.length === 1 &&
+            tool === 'select' &&
             selObjs.map((o) =>
               'points' in o ? (
                 <g key={o.id + 'v'}>

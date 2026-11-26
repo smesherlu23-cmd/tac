@@ -3,8 +3,9 @@ import type { Pt } from '../types';
 export const dist = (a: Pt, b: Pt) => Math.hypot(b.x - a.x, b.y - a.y);
 
 /** Centripetal-ish Catmull-Rom sampled into a dense polyline. */
-export function smoothPath(pts: Pt[], closed = false, steps = 12): Pt[] {
-  if (pts.length < 3) return pts.slice();
+export function smoothPath(raw: Pt[], closed = false, steps = 12): Pt[] {
+  const pts = dedupePoints(raw, 0.01, closed);
+  if (pts.length < 3) return pts;
   const n = pts.length;
   const get = (i: number) => (closed ? pts[(i + n) % n] : pts[Math.max(0, Math.min(n - 1, i))]);
   const out: Pt[] = [];
@@ -25,6 +26,18 @@ export function smoothPath(pts: Pt[], closed = false, steps = 12): Pt[] {
     }
   }
   if (!closed) out.push(pts[n - 1]);
+  return out;
+}
+
+/** Drop consecutive points closer than `minDist` (e.g. the extra point a double click adds). */
+export function dedupePoints(pts: Pt[], minDist: number, closed = false): Pt[] {
+  const out: Pt[] = [];
+  for (const q of pts) {
+    if (!Number.isFinite(q.x) || !Number.isFinite(q.y)) continue;
+    if (out.length && dist(out[out.length - 1], q) < minDist) continue;
+    out.push(q);
+  }
+  if (closed) while (out.length > 3 && dist(out[0], out[out.length - 1]) < minDist) out.pop();
   return out;
 }
 
@@ -98,12 +111,15 @@ function normals(p: Pt[]): Pt[] {
  * The body tapers slightly from tail to the head.
  */
 export function wideArrowOutline(raw: Pt[], width: number, smooth = true): Pt[] {
-  const p0 = smooth ? smoothPath(raw) : raw;
+  const p0 = dedupePoints(smooth ? smoothPath(raw) : raw, 0.01);
   if (p0.length < 2) return [];
+  const total = polylineLength(p0);
+  if (total < 1) return [];
+  // short arrows: shrink the head and the body instead of disappearing
+  const k = Math.min(1, total / (width * 1.6 * 2.2));
+  width *= k;
   const headLen = width * 1.6;
   const headHalf = width * 1.05;
-  const total = polylineLength(p0);
-  if (total < headLen * 1.2) return [];
   const body = trimEnd(p0, headLen);
   const ns = normals(body);
   const left: Pt[] = [];

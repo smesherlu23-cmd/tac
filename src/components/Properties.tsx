@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useStore, uid } from '../store';
+import { docScale, useStore, uid } from '../store';
 import type { Doc, MapObject, Side } from '../types';
 import { SYMBOLS } from '../symbols/catalog';
 import { ECHELONS, SIDE_NAMES, sideColor } from '../symbols/render';
@@ -39,7 +39,7 @@ const Field = ({ label, children }: { label: string; children: ReactNode }) => (
 function Range({ value, min, max, step = 1, onChange, suffix = '' }: { value: number; min: number; max: number; step?: number; onChange: (v: number) => void; suffix?: string }) {
   return (
     <div className="range">
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      <input type="range" min={min} max={Math.max(max, value)} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
       <span>
         {step < 1 ? value.toFixed(2) : Math.round(value)}
         {suffix}
@@ -101,6 +101,8 @@ export default function Properties() {
   const ids = objs.map((o) => o.id);
   const o = objs[0];
   const single = objs.length === 1;
+  // slider limits follow the map size so large photos still get usable ranges
+  const ks = docScale(doc);
   const color = o.color || sideColor(doc.standard, o.side);
 
   const reorder = (dir: 1 | -1) =>
@@ -212,7 +214,7 @@ export default function Properties() {
             </label>
           </div>
           <Field label="Размер">
-            <Range value={o.size} min={16} max={240} onChange={(v) => edit(ids, 'size', (x) => ({ ...x, size: v }))} />
+            <Range value={o.size} min={16} max={Math.round(240 * ks)} onChange={(v) => edit(ids, 'size', (x) => ({ ...x, size: v }))} />
           </Field>
           <Field label="Поворот">
             <Range value={o.rotation} min={0} max={359} suffix="°" onChange={(v) => edit(ids, 'rot', (x) => ({ ...x, rotation: v }))} />
@@ -232,7 +234,7 @@ export default function Properties() {
             </select>
           </Field>
           <Field label="Ширина">
-            <Range value={o.width} min={6} max={120} onChange={(v) => edit(ids, 'w', (x) => ({ ...x, width: v }))} />
+            <Range value={o.width} min={6} max={Math.round(120 * ks)} onChange={(v) => edit(ids, 'w', (x) => ({ ...x, width: v }))} />
           </Field>
           <Field label="Подпись">
             <input value={o.label} placeholder="напр. 1 мсб" onChange={(e) => edit(ids, 'label', (x) => ({ ...x, label: e.target.value }))} />
@@ -252,7 +254,7 @@ export default function Properties() {
             </select>
           </Field>
           <Field label="Толщина">
-            <Range value={o.width} min={1} max={16} step={0.5} onChange={(v) => edit(ids, 'w', (x) => ({ ...x, width: v }))} />
+            <Range value={o.width} min={1} max={Math.round(16 * ks)} step={0.5} onChange={(v) => edit(ids, 'w', (x) => ({ ...x, width: v }))} />
           </Field>
           <label className="check">
             <input type="checkbox" checked={o.smooth} onChange={(e) => edit(ids, 'smooth', (x) => ({ ...x, smooth: e.target.checked }))} />
@@ -281,7 +283,7 @@ export default function Properties() {
             </Field>
           )}
           <Field label="Толщина контура">
-            <Range value={o.width} min={1} max={16} step={0.5} onChange={(v) => edit(ids, 'w', (x) => ({ ...x, width: v }))} />
+            <Range value={o.width} min={1} max={Math.round(16 * ks)} step={0.5} onChange={(v) => edit(ids, 'w', (x) => ({ ...x, width: v }))} />
           </Field>
           <div className="row checks">
             <label className="check">
@@ -305,7 +307,7 @@ export default function Properties() {
             <textarea rows={3} value={o.text} onChange={(e) => edit(ids, 'text', (x) => ({ ...x, text: e.target.value }))} />
           </Field>
           <Field label="Размер шрифта">
-            <Range value={o.fontSize} min={8} max={160} onChange={(v) => edit(ids, 'fs', (x) => ({ ...x, fontSize: v }))} />
+            <Range value={o.fontSize} min={8} max={Math.round(160 * ks)} onChange={(v) => edit(ids, 'fs', (x) => ({ ...x, fontSize: v }))} />
           </Field>
           <Field label="Поворот">
             <Range value={o.rotation} min={0} max={359} suffix="°" onChange={(v) => edit(ids, 'rot', (x) => ({ ...x, rotation: v }))} />

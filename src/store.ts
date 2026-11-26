@@ -160,6 +160,16 @@ export const useStore = create<State>((set, get) => ({
   setStandard: (standard) => get().change((d) => ({ ...d, standard })),
 }));
 
+/**
+ * Size factor for new objects. Sizes are stored in map pixels, so on a large
+ * photo (e.g. 4000 px) default-sized signs, arrows and lines would look tiny.
+ */
+export function docScale(doc: Doc = useStore.getState().doc): number {
+  if (!doc.map) return 1;
+  const k = Math.max(doc.map.width, doc.map.height) / 1200;
+  return Math.min(12, Math.max(1, Math.round(k * 4) / 4));
+}
+
 /** Layer for a new object: units/graphics go to the side layer when auto mode is on. */
 export function layerFor(kind: MapObject['kind'], side: Side): string {
   const { autoLayer, activeLayerId, doc } = useStore.getState();
