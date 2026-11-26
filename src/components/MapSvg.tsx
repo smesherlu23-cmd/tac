@@ -20,24 +20,27 @@ export function objColor(o: MapObject, standard: Standard) {
   return sideColor(standard, o.side, o.color);
 }
 
-function patternId(fill: FillStyle, color: string) {
-  return `p-${fill}-${color.replace(/[^a-z0-9]/gi, '')}`;
+/** Hatch spacing follows the outline width so large maps get visible hatching. */
+const hatchScale = (width: number) => Math.max(1, Math.round((width / 3) * 4) / 4);
+
+function patternId(fill: FillStyle, color: string, width: number) {
+  return `p-${fill}-${color.replace(/[^a-z0-9]/gi, '')}-${String(hatchScale(width)).replace('.', '_')}`;
 }
 
 function Patterns({ objects, standard }: { objects: MapObject[]; standard: Standard }) {
-  const seen = new Map<string, { fill: FillStyle; color: string }>();
+  const seen = new Map<string, { fill: FillStyle; color: string; k: number }>();
   for (const o of objects) {
     if (o.kind === 'area' && (o.fill === 'hatch' || o.fill === 'cross')) {
       const c = objColor(o, standard);
-      seen.set(patternId(o.fill, c), { fill: o.fill, color: c });
+      seen.set(patternId(o.fill, c, o.width), { fill: o.fill, color: c, k: hatchScale(o.width) });
     }
   }
   return (
     <defs>
-      {[...seen.entries()].map(([id, { fill, color }]) => (
-        <pattern key={id} id={id} patternUnits="userSpaceOnUse" width="12" height="12" patternTransform="rotate(45)">
-          <line x1="0" y1="0" x2="0" y2="12" stroke={color} strokeWidth="2" />
-          {fill === 'cross' && <line x1="0" y1="6" x2="12" y2="6" stroke={color} strokeWidth="2" />}
+      {[...seen.entries()].map(([id, { fill, color, k }]) => (
+        <pattern key={id} id={id} patternUnits="userSpaceOnUse" width={12 * k} height={12 * k} patternTransform="rotate(45)">
+          <line x1="0" y1="0" x2="0" y2={12 * k} stroke={color} strokeWidth={2 * k} />
+          {fill === 'cross' && <line x1="0" y1={6 * k} x2={12 * k} y2={6 * k} stroke={color} strokeWidth={2 * k} />}
         </pattern>
       ))}
       <filter id="f-gray">
@@ -108,17 +111,18 @@ function ArrowView({ o, standard }: { o: ArrowObj; standard: Standard }) {
   if (o.style === 'main' || o.style === 'counter') {
     const outline = wideArrowOutline(o.points, w);
     if (!outline.length) return null;
+    const osw = Math.max(1.5, w / 12);
     return (
       <g>
-        <path d={toPathD(outline, true)} fill="none" stroke={HALO} strokeWidth={6} strokeLinejoin="round" />
+        <path d={toPathD(outline, true)} fill="none" stroke={HALO} strokeWidth={osw * 2} strokeLinejoin="round" />
         <path
           d={toPathD(outline, true)}
           fill={c}
           fillOpacity={o.style === 'main' ? 0.28 : 0.12}
           stroke={c}
-          strokeWidth={3}
+          strokeWidth={osw}
           strokeLinejoin="round"
-          strokeDasharray={o.style === 'counter' ? '12 7' : undefined}
+          strokeDasharray={o.style === 'counter' ? `${osw * 4} ${osw * 2.3}` : undefined}
         />
         {label}
       </g>
@@ -247,7 +251,7 @@ function AreaView({ o, standard }: { o: AreaObj; standard: Standard }) {
   if (o.points.length < 3) return null;
   const path = o.smooth ? smoothPath(o.points, true) : o.points;
   const d = toPathD(path, true);
-  const fill = o.fill === 'none' ? 'none' : o.fill === 'solid' ? c : `url(#${patternId(o.fill, c)})`;
+  const fill = o.fill === 'none' ? 'none' : o.fill === 'solid' ? c : `url(#${patternId(o.fill, c, o.width)})`;
   const ct = centroid(path);
   const fs = Math.max(13, o.width * 5);
   return (
