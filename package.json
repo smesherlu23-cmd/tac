@@ -35,7 +35,14 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Tactic-Setup-${version}.exe"
+    },
+    "directories": {
+      "output": "release"
+    },
+    "portable": {
+      "artifactName": "Tactic-Portable-${version}.exe"
     }
   },
   "dependencies": {
